@@ -49,7 +49,10 @@
 #define DEFAULT_YAW     -4
 
 
-#define ROBIT   37
+#define ROBIT               37
+
+#define FIRSTHALF_GOAL      -90
+#define SECONDHALF_GOAL     90
 
 typedef struct _GameState
 {
@@ -59,12 +62,21 @@ typedef struct _GameState
     int readyTime;
     int penalty;
 
+    int stateBefore;
+
 } GameState;
 
 typedef struct _VisionMsg
 {
     int ballX;
     int ballY;
+    int ballD;
+
+    int targetX;
+    int targetY;
+
+    int nowX;
+    int nowY;
 
     int yaw;
 

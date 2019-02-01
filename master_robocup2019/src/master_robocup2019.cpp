@@ -28,6 +28,11 @@ int temp_case;
 
 int finding_turn = 0;
 
+bool local = false;
+bool isPlaying = false;
+
+int Gp_direction = 0;
+
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "master_robocup2019");
@@ -69,134 +74,265 @@ void robocupCallback(const ros::TimerEvent&)
     inverse_kinematics::info_kinematics_msg ikMsg;
     serial_mcu::Mt2Serial_msg mtMsg;
 
-    switch (gameInfo.state)
+    if(gameInfo.penalty == HL_PICKUP_OR_INCAPABLE || gameInfo.penalty == HL_SERVICE)
     {
-    case STATE_INITIAL:
-        cout << "********************\n";
-        cout << "   INITIAL\n";
-        cout << "********************\n";
-
         Tracking_point_x = ballTrackingPointX;
         Tracking_point_y = ballTrackingPointY;
-        Tracking_thing_x = 0;
-        Tracking_thing_y = 0;
+        Tracking_thing_x = ballTrackingPointX;
+        Tracking_thing_y = ballTrackingPointY;
 
         ikMsg.flag = false;
 
-        break;
-    case STATE_READY:
-        cout << "********************\n";
-        cout << "   READY\n";
-        cout << "********************\n";
+        robocup_case = MODE_BALL_DETECT;
+    }
+    else
+    {
+        switch (gameInfo.state)
+        {
+        case STATE_INITIAL:
+            cout << "********************\n";
+            cout << "   INITIAL\n";
+            cout << "********************\n";
 
-        if(gameInfo.kickoffTeam == ROBIT)
-        {
-            cout << "KICK OFF" << endl;
-            Tracking_point_x = ballTrackingPointX;
-            Tracking_point_y = ballTrackingPointY;
-            Tracking_thing_x = visionInfo.ballX;
-            Tracking_thing_y = visionInfo.ballY;
-        }
-        else
-        {
             Tracking_point_x = ballTrackingPointX;
             Tracking_point_y = ballTrackingPointY;
             Tracking_thing_x = 0;
             Tracking_thing_y = 0;
-        }
 
-        ikMsg.flag = true;
+            ikMsg.flag = false;
 
-        ikMsg.X_length = DEFAULT_X + 30;
-        ikMsg.Y_length = DEFAULT_Y;
-        ikMsg.Z_length = DEFAULT_Z;
-        ikMsg.L_yaw = DEFAULT_YAW + visionInfo.yaw;
+            break;
+        case STATE_READY:
+            cout << "********************\n";
+            cout << "   READY\n";
+            cout << "********************\n";
 
-        if(gameInfo.readyTime < 5)
-        {
-            cout << "turn" << endl;
-            ikMsg.X_length = DEFAULT_X;
-            ikMsg.Y_length = DEFAULT_Y;
-            ikMsg.Z_length = DEFAULT_Z;
+            static int targetYaw = 0;
 
-            if(gameInfo.firstHalf)
+            ikMsg.flag = true;
+
+            if(isPlaying)
             {
-                cout << "right" << endl;
-                ikMsg.L_yaw = DEFAULT_YAW + 15;
+                cout << "scored" << endl;
+                if(gameInfo.firstHalf)
+                {
+                    if(gameInfo.kickoffTeam == ROBIT)
+                        targetYaw = FIRSTHALF_GOAL;
+                    else
+                        targetYaw = SECONDHALF_GOAL;
+                }
+                else
+                {
+                    if(gameInfo.kickoffTeam == ROBIT)
+                        targetYaw = SECONDHALF_GOAL;
+                    else
+                        targetYaw = FIRSTHALF_GOAL;
+                }
+
+                ikMsg.Y_length = DEFAULT_Y;
+                ikMsg.Z_length = DEFAULT_Z;
+                ikMsg.L_yaw = DEFAULT_YAW - (targetYaw - visionInfo.yaw);
+
+                ikMsg.X_length = DEFAULT_X + (abs(ikMsg.L_yaw) > 10 ? 15 : 30);
             }
             else
             {
-                cout << "left" << endl;
-                ikMsg.L_yaw = DEFAULT_YAW - 15;
+                if(local)
+                {
+                    if(gameInfo.kickoffTeam == ROBIT)
+                    {
+                        cout << "KICK OFF" << endl;
+                        Tracking_point_x = ballTrackingPointX;
+                        Tracking_point_y = ballTrackingPointY;
+                        Tracking_thing_x = 0;//visionInfo.ballX;
+                        Tracking_thing_y = 0;//visionInfo.ballY;
+
+                        if(TRacking_flag_C == 0)    tracking_cnt++; // Find Ball
+                        else                        tracking_cnt = 0;
+
+                        //            if(tracking_cnt > 10)
+                        //            {
+                        //                if(TILT_POSITION > -60)
+                        //                    ikMsg.X_length = DEFAULT_X + 30;
+                        //                else
+                        //                    ikMsg.X_length = DEFAULT_X;
+
+                        //                tracking_cnt = 0;
+                        //            }
+                        //            else
+                        //                ikMsg.X_length = DEFAULT_X + 30;
+
+                        cout << "targetY = " << visionInfo.targetY << endl;
+                        cout << "nowY = " << visionInfo.nowY << endl;
+
+                        if(visionInfo.nowY != 0)
+                        {
+                            int distance = abs(visionInfo.targetY - visionInfo.nowY);
+                            cout << "distance = " << distance << endl;
+
+                            ikMsg.X_length = DEFAULT_X + distance;
+                        }
+                        else
+                            ikMsg.X_length = DEFAULT_X + 15;
+                    }
+                    else
+                    {
+                        Tracking_point_x = ballTrackingPointX;
+                        Tracking_point_y = ballTrackingPointY;
+                        Tracking_thing_x = 0;
+                        Tracking_thing_y = 0;
+                    }
+
+                    //        ikMsg.X_length = DEFAULT_X + 30;
+                    ikMsg.Y_length = DEFAULT_Y;
+                    ikMsg.Z_length = DEFAULT_Z;
+                    ikMsg.L_yaw = DEFAULT_YAW + visionInfo.yaw;
+
+                    if(gameInfo.readyTime < 5)
+                    {
+                        cout << "turn" << endl;
+                        ikMsg.X_length = DEFAULT_X;
+                        ikMsg.Y_length = DEFAULT_Y;
+                        ikMsg.Z_length = DEFAULT_Z;
+
+                        if(gameInfo.firstHalf)
+                        {
+                            cout << "right" << endl;
+                            targetYaw = -90;
+                        }
+                        else
+                        {
+                            cout << "left" << endl;
+                            targetYaw = 90;
+                        }
+
+                        cout << "target yaw = " << targetYaw
+                             << " now yaw = " << visionInfo.yaw << endl;
+
+                        ikMsg.L_yaw = DEFAULT_YAW - (targetYaw - visionInfo.yaw);
+                    }
+                }
+                else
+                {
+                    Tracking_point_x = ballTrackingPointX;
+                    Tracking_point_y = ballTrackingPointY;
+                    Tracking_thing_x = 0;
+                    Tracking_thing_y = 0;
+
+                    ikMsg.X_length = DEFAULT_X + 30;
+                    ikMsg.Y_length = DEFAULT_Y;
+                    ikMsg.Z_length = DEFAULT_Z;
+                    ikMsg.L_yaw = DEFAULT_YAW + (abs(visionInfo.yaw) < 90 ? visionInfo.yaw : (visionInfo.yaw > 0 ? visionInfo.yaw - 180 : visionInfo.yaw + 180));
+
+                    if(gameInfo.readyTime < 5)
+                    {
+                        ikMsg.X_length = DEFAULT_X + 30;
+                        ikMsg.Y_length = DEFAULT_Y;
+                        ikMsg.Z_length = DEFAULT_Z;
+
+                        if(gameInfo.firstHalf)
+                        {
+                            cout << "right" << endl;
+                            targetYaw = FIRSTHALF_GOAL;
+                        }
+                        else
+                        {
+                            cout << "left" << endl;
+                            targetYaw = SECONDHALF_GOAL;
+                        }
+
+                        ikMsg.L_yaw = DEFAULT_YAW - (targetYaw - visionInfo.yaw);
+                    }
+                }
             }
-        }
 
-        if(ikMsg.L_yaw > 10)        ikMsg.L_yaw = 10;
-        else if(ikMsg.L_yaw < -10)  ikMsg.L_yaw = -10;
+            if(ikMsg.X_length > 30) ikMsg.X_length = 30;
 
-        break;
-    case STATE_SET:
-        cout << "********************\n";
-        cout << "   SET\n";
-        cout << "********************\n";
+            if(ikMsg.L_yaw > 10)        ikMsg.L_yaw = 10;
+            else if(ikMsg.L_yaw < -10)  ikMsg.L_yaw = -10;
 
-        if(gameInfo.kickoffTeam == ROBIT)
-        {
-            robocup_case = MODE_KICK;
-        }
-        else
-        {
-            robocup_case = MODE_BALL_DETECT;
-        }
-
-        ikMsg.flag = false;
-
-        break;
-    case STATE_PLAYING:
-        cout << "********************\n";
-        cout << "   PLAYING\n";
-        cout << "********************\n";
-
-        switch (robocup_case)
-        {
-        case MODE_BALL_DETECT:
+            cout << "X = " << ikMsg.X_length << endl;
+            cout << "Y = " << ikMsg.Y_length << endl;
+            cout << "Z = " << ikMsg.Z_length << endl;
+            cout << "Yaw = " << ikMsg.L_yaw << endl;
 
             break;
-        case MODE_BALL_STAND:
+        case STATE_SET:
+            cout << "********************\n";
+            cout << "   SET\n";
+            cout << "********************\n";
+
+
+            if(gameInfo.kickoffTeam == ROBIT)
+            {
+                robocup_case = MODE_KICK;
+            }
+            else
+            {
+                robocup_case = MODE_BALL_DETECT;
+            }
+
+            ikMsg.flag = false;
 
             break;
-        case MODE_BALL_DETAIL:
+        case STATE_PLAYING:
+            cout << "********************\n";
+            cout << "   PLAYING\n";
+            cout << "********************\n";
+
+            isPlaying = true;
+
+            switch (robocup_case)
+            {
+            case MODE_BALL_DETECT:
+                Tracking_point_x = ballTrackingPointX;
+                Tracking_point_y = ballTrackingPointY;
+                Tracking_thing_x = visionInfo.ballX;
+                Tracking_thing_y = visionInfo.ballY;
+
+                break;
+            case MODE_BALL_STAND:
+
+                break;
+            case MODE_BALL_DETAIL:
+
+                break;
+            case MODE_KICK_READY:
+
+                break;
+            case MODE_KICK:
+
+                robocup_case = MODE_BALL_DETECT;
+
+                break;
+            case SCAN:
+
+                break;
+            default:
+                break;
+            }
 
             break;
-        case MODE_KICK_READY:
+        case STATE_FINISHED:
+            cout << "********************\n";
+            cout << "1. FINISHED\n";
+            cout << "********************\n";
 
-            break;
-        case MODE_KICK:
+            isPlaying = false;
 
-            break;
-        case SCAN:
+            Tracking_point_x = ballTrackingPointX;
+            Tracking_point_y = ballTrackingPointY;
+            Tracking_thing_x = 0;
+            Tracking_thing_y = 0;
+
+            ikMsg.flag = false;
 
             break;
         default:
             break;
+
+            gameInfo.stateBefore = gameInfo.state;
         }
-
-        break;
-    case STATE_FINISHED:
-        cout << "********************\n";
-        cout << "1. FINISHED\n";
-        cout << "********************\n";
-
-        Tracking_point_x = ballTrackingPointX;
-        Tracking_point_y = ballTrackingPointY;
-        Tracking_thing_x = 0;
-        Tracking_thing_y = 0;
-
-        ikMsg.flag = false;
-
-        break;
-    default:
-        break;
     }
 
     ptMsg.Angle_Yaw = PAN_POSITION;
@@ -204,7 +340,7 @@ void robocupCallback(const ros::TimerEvent&)
 
     pantiltPub.publish(ptMsg);
     ikPub.publish(ikMsg);
-    mtPub.publish(mtMsg);
+//    mtPub.publish(mtMsg);
 }
 
 void gameCallback(const gamecontroller::robocupController2::ConstPtr &msg)
@@ -220,6 +356,13 @@ void visionCallback(const robocup2019_vision::robocupVision_msg::ConstPtr &msg)
 {
     visionInfo.ballX = msg->ballX;
     visionInfo.ballY = msg->ballY;
+    visionInfo.ballD = msg->ballD;
+
+    visionInfo.targetX = msg->targetX;
+    visionInfo.targetY = msg->targetY;
+
+    visionInfo.nowX = msg->nowX;
+    visionInfo.nowY = msg->nowY;
 
     visionInfo.yaw = msg->yaw;
 }
