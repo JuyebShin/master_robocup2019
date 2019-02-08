@@ -8,20 +8,25 @@
 
 #include "pid_control_float.h"
 
-//MESSAGE HEADER=================================================
+/** message headers
+ *
+ * */
+
 #include "RoboCupGameControlData.h"
 #include "robocupController2.h"
 #include "pan_tilt_msg.h"
 #include "info_kinematics_msg.h"
-#include "robocupVision_msg.h"
-#include "motion_end.h"
 #include "Mt2Serial_msg.h"
+#include "robocupVision.h"
+#include "robocupVision_msg.h"
 #include "imu_msg.h"
+#include "motion_end.h"
+#include "udp_order.h"
+
 
 //MOTION=========================================================
-#define SHOOT 0x01
-
-
+#define SHOOT_R 0x01
+#define SHOOT_L 0x02
 
 //ROBOCUP MODE===================================================
 #define MODE_TEST                0
@@ -35,29 +40,20 @@
 #define MODE_GOALPOST_DETECT            20
 #define MODE_STOP                       999
 
-#define MODE_NO_BALL                            1000
+#define SCAN                            1000
+#define MODE_NO_BALL                    1000
 
 /** inverse kinematics defines
  *
  * */
 
 //ROBOT INFO==============================================================
-#define DEFAULT_X       -16
+#define DEFAULT_X       0
 #define DEFAULT_Y       0
-#define DEFAULT_Z       102
-#define DEFAULT_YAW     0
-
-//foot to ball distance parameter
-#define TILT_INIT_POSITION  0.0
-#define ROBOT_HEIGHT        505
-#define CAMERA_HEIGHT       55
-
+#define DEFAULT_Z       100
+#define DEFAULT_YAW     -4
 
 //PARAMETER================================================================
-//Goalpost direction
-#define LEFT    1
-#define RIGHT   2
-
 #define ROBIT               37
 
 #define FIRSTHALF_GOAL      -90
@@ -77,60 +73,65 @@ typedef struct _GameState
 
 typedef struct _VisionMsg
 {
-    int Ballx;
-    int Bally;
-    int BallDist;
-    int Yaw;
+    int ballX;
+    int ballY;
+    int ballD;
+
+    int targetX;
+    int targetY;
+    int targetYaw;
+
+    int nowX;
+    int nowY;
+
+    int yaw;
 
 } VisionMsg;
 
-typedef struct _ImuMsg
+typedef struct _ImuState
 {
-    // Euler
-    float roll;
-    float pitch;
-    float yaw;
+    int pitch;
+    int roll;
+    int yaw;
 
-}ImuMsg;
+} ImuState;
 
-int motion_end = 0;
-bool motion_flag = false;
-
-
-//MESSAGE===================================================================
-pan_tilt::pan_tilt_msg ptMsg;
-inverse_kinematics::info_kinematics_msg ikMsg;
-serial_mcu::Mt2Serial_msg motionMsg;
+int motionEnd = 0;
+bool motionFlag = false;
 
 PID Tracking_pid_pan;
 PID Tracking_pid_tilt;
-//subscriber
+
+//MESSAGE===================================================================
+/** message subscriber
+ *
+ * */
 ros::Subscriber gameSub;
 ros::Subscriber visionSub;
 ros::Subscriber imuSub;
-ros::Subscriber motionendSub;
-//publisher
+ros::Subscriber motionSub;
+ros::Subscriber udpsub;
+
+/** message publisher
+ *
+ * */
 ros::Publisher pantiltPub;
 ros::Publisher ikPub;
-ros::Publisher motionPub;
-
+ros::Publisher mtPub;
 
 //FUCTION====================================================================
-#define WALK_STOP ikMsg.flag = 0
-void WALK_START(double x, double y, double yaw);
-void TRACKING_WHAT(int TrackingPoint_x, int TrackingPoint_y, int TrackingThing_x, int TrackingThing_y);
-
 void robocupCallback(const ros::TimerEvent&);
 void gameCallback(const gamecontroller::robocupController2::ConstPtr&);
 void visionCallback(const robocup2019_vision::robocupVision_msg::ConstPtr&);
 void imuCallback(const mw_ahrsv1::imu_msg::ConstPtr&);
 void motionCallback(const serial_mcu::motion_end::ConstPtr&);
+void udpCallback(const udpcom::udp_order::ConstPtr&);
 
 void DXL_Motion(unsigned char Motion_Num);
+
 int Tracking(double now_x, double X_POINT_STANDARD, double now_y, double Y_POINT_STANDARD);
 
 
-//TRACKING PARAMETER===========================================================
 const int trackingDefaultPointX        = 320;
 const int trackingDefaultPointY        = 240;
 const int defaultPanMax                = 50;
@@ -139,6 +140,8 @@ const int defaultTiltMax               = 0;
 const int defaultTiltMin               = -80;
 const int defaultScanPanRange          = 30;
 const int defaultScanTiltRange         = -30;
+
+
 
 // goalpost
 const int goalpostTrackingPointX       = 160;
@@ -153,6 +156,7 @@ const int goalpostScanTiltRange        = goalpostTiltMin;
 const double goalpostYawingYLengthAcc                   = 0.0;
 const double goalpostYawingYLengthAccUnit               = 30.0;
 const double goalposGROUND2CAMERAtYawingYLengthLimit    = 0.0;
+
 
 // ball
 const int ballTrackingPointX           = 320;

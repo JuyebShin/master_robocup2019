@@ -27,6 +27,7 @@ struct robocupVision_msg_
     : ballX(0)
     , ballY(0)
     , ballD(0)
+    , targetYaw(0.0)
     , goalX(0)
     , goalY(0)
     , targetX(0)
@@ -39,6 +40,7 @@ struct robocupVision_msg_
     : ballX(0)
     , ballY(0)
     , ballD(0)
+    , targetYaw(0.0)
     , goalX(0)
     , goalY(0)
     , targetX(0)
@@ -59,6 +61,9 @@ struct robocupVision_msg_
 
    typedef int64_t _ballD_type;
   _ballD_type ballD;
+
+   typedef double _targetYaw_type;
+  _targetYaw_type targetYaw;
 
    typedef int64_t _goalX_type;
   _goalX_type goalX;
@@ -159,12 +164,12 @@ struct MD5Sum< ::robocup2019_vision::robocupVision_msg_<ContainerAllocator> >
 {
   static const char* value()
   {
-    return "db3b8d49234433ce0e829dd2f33004e3";
+    return "a7dde72abec97ea7da9e413d24552916";
   }
 
   static const char* value(const ::robocup2019_vision::robocupVision_msg_<ContainerAllocator>&) { return value(); }
-  static const uint64_t static_value1 = 0xdb3b8d49234433ceULL;
-  static const uint64_t static_value2 = 0x0e829dd2f33004e3ULL;
+  static const uint64_t static_value1 = 0xa7dde72abec97ea7ULL;
+  static const uint64_t static_value2 = 0xda9e413d24552916ULL;
 };
 
 template<class ContainerAllocator>
@@ -186,6 +191,8 @@ struct Definition< ::robocup2019_vision::robocupVision_msg_<ContainerAllocator> 
     return "int64 ballX\n\
 int64 ballY\n\
 int64 ballD\n\
+\n\
+float64 targetYaw\n\
 \n\
 int64 goalX\n\
 int64 goalY\n\
@@ -218,6 +225,7 @@ namespace serialization
       stream.next(m.ballX);
       stream.next(m.ballY);
       stream.next(m.ballD);
+      stream.next(m.targetYaw);
       stream.next(m.goalX);
       stream.next(m.goalY);
       stream.next(m.targetX);
@@ -249,6 +257,8 @@ struct Printer< ::robocup2019_vision::robocupVision_msg_<ContainerAllocator> >
     Printer<int64_t>::stream(s, indent + "  ", v.ballY);
     s << indent << "ballD: ";
     Printer<int64_t>::stream(s, indent + "  ", v.ballD);
+    s << indent << "targetYaw: ";
+    Printer<double>::stream(s, indent + "  ", v.targetYaw);
     s << indent << "goalX: ";
     Printer<int64_t>::stream(s, indent + "  ", v.goalX);
     s << indent << "goalY: ";
