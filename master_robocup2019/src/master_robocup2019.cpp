@@ -28,11 +28,40 @@ int robocup_case = MODE_BALL_DETECT;
 int temp_case;
 
 int finding_turn = 0;
+int walk_term = 0;
 
+int GOALPOST = 0;
+int Goalpost_error = 4;
+
+bool scan_start = false;
 bool local = false;
 bool isPlaying = false;
+bool isSet = false;
+bool isUDP = true;
+bool isFalldown = false;
+bool wasPenalty = false;
+bool wasInitial = false;
+bool wasSet = false;
+bool isNoball = false;
+bool isNoball_pan = false;
+bool Tracking_ON_OFF = true;
 
-int Gp_direction = 0;
+bool stop = false;
+
+int WHAT_YOUR_CASE = 0;
+int WHAT_YOUR_BALLD = 0;
+int My_cnt = 0;
+int You_cnt = 0;
+int YourBallD = 0;
+int DesireBallD_walk_my = 190;//230
+int DesireBallD_walk_your = 2100;
+int DesireBallD_stand = 80;
+int DesireWalkSpeed = 73;
+int DesirePP_R = -23;
+int DesirePP_L = 23;
+
+int motion_what = SHOOT_R;
+int add_what = 0;
 
 
 int main(int argc, char **argv)
@@ -51,49 +80,88 @@ int main(int argc, char **argv)
     visionSub = n.subscribe("robocup2019_vision", 100, visionCallback);
     imuSub = n.subscribe("imu", 100, imuCallback);
     motionendSub = n.subscribe("motion_end", 100, motionCallback);
+    udpsub = n.subscribe("udp_order", 100, udpCallback);
 
     pantiltPub = n.advertise<pan_tilt::pan_tilt_msg>("pantilt", 100);
     motionPub = n.advertise<serial_mcu::Mt2Serial_msg>("Motion", 100);
     ikPub = n.advertise<inverse_kinematics::info_kinematics_msg>("kinematics", 100);
+    casePub = n.advertise<udpcom::master2udp>("udp_case", 100);
 
     ros::Timer robocuoTimer = n.createTimer(ros::Duration(0.01), robocupCallback);
-
-//    cout<<"============================"<<endl;
-//    cout<<"  write goalpost direction"<<endl;
-//    cout<<"  LEFT:  1        RIGHT: 2"<<endl;
-//    cout<<"============================"<<endl;
-//    cin>>Gp_direction;
 
     ros::spin();
 }
 
 void robocupCallback(const ros::TimerEvent&)
 {
+    cout<<"===========motion end==========    "<<motion_end<<endl<<endl;
+    cout<<"add_what = " <<add_what<<endl;
+    cout<<"PAN_POSITION ======== "<<PAN_POSITION<<endl;
+    cout<<"WHAT ?? case??" <<WHAT_YOUR_CASE<<endl;
     int TRacking_flag_C = Tracking(Tracking_thing_x, Tracking_point_x, Tracking_thing_y, Tracking_point_y);
+
     static int tracking_cnt = 0;
-    cout<<"BAllDIST : "<<visionInfo.BallDist<<endl;
 
     static int lost_ball_count = 0;
+    static int temp_yaw = 0;
 
-    cout<<"llllllosttttt            =  "<<lost_ball_count<<endl;
+    cout<<"YAWWWWWWWWWWWW       "<<visionInfo.yaw<<endl;
+    cout<<"temp                 "<<temp_yaw<<endl;
 
+    if(gameInfo.firstHalf == true)
+        GOALPOST = FIRSTHALF_GOAL;
+    else
+        GOALPOST = SECONDHALF_GOAL;
 
     /*For Test*/
-//    gameInfo.state = STATE_PLAYING;
+   // gameInfo.state = STATE_PLAYING;
+   // GOALPOST = SECONDHALF_GOAL;
+////    robocup_case = MODE_BALL_DETECT;
 
-    if(gameInfo.penalty == HL_PICKUP_OR_INCAPABLE || gameInfo.penalty == HL_SERVICE)
+    cout<<"imuInfo.roll = "<<imuInfo.roll<<endl;
+
+    if(imuInfo.roll > 50.0)
     {
-        Tracking_point_x = ballTrackingPointX;
-        Tracking_point_y = ballTrackingPointY;
-        Tracking_thing_x = ballTrackingPointX;
-        Tracking_thing_y = ballTrackingPointY;
+        DXL_Motion(STAND_R);
+        isFalldown = true;
+    }
+    else if(imuInfo.roll < -50.0)
+    {
+        DXL_Motion(STAND_L);
+        isFalldown = true;
+    }
 
-        ikMsg.flag = false;
+    if(imuInfo.pitch > 50.0)
+    {
+        DXL_Motion(STAND_F);
+        isFalldown = true;
+    }
+    else if(imuInfo.pitch < -50.0)
+    {
+        DXL_Motion(STAND_B);
+        isFalldown = true;
+    }
 
+    if(gameInfo.penalty)
+    {
+        TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY, ballTrackingPointX, ballTrackingPointY);
+        WALK_STOP;
         robocup_case = MODE_BALL_DETECT;
+        wasPenalty = true;
     }
     else
     {
+        if(isFalldown)
+        {
+            cout<<"FALL DOWN!!!!!!!!!!!!!!!!!!!!"<<endl<<endl;
+            if(motion_end)
+            {
+                robocup_case = MODE_BALL_DETECT;
+                isFalldown = false;
+                motion_end = 0;
+            }
+        }
+        else{  // is not Falldown
         switch (gameInfo.state)
         {
         case STATE_INITIAL:
@@ -105,6 +173,8 @@ void robocupCallback(const ros::TimerEvent&)
             Tracking_point_y = ballTrackingPointY;
             Tracking_thing_x = 0;
             Tracking_thing_y = 0;
+
+            wasInitial = true;
 
             ikMsg.flag = false;
 
@@ -118,122 +188,132 @@ void robocupCallback(const ros::TimerEvent&)
 
             ikMsg.flag = true;
 
-            if(isPlaying)
+            if(local)
             {
-                cout << "scored" << endl;
-                if(gameInfo.firstHalf)
+                int tempYaw = visionInfo.yaw - visionInfo.targetYaw;
+
+                if(tempYaw > 180) tempYaw -= 360;
+                else if(tempYaw <= -180) tempYaw += 360;
+
+                cout << "tempYaw = " << tempYaw << endl;
+
+//                ikMsg.L_yaw = DEFAULT_YAW + (abs(tempYaw) < 90 ?
+//                                                 (abs(tempYaw) > 10 ? tempYaw : 0) :
+//                                                 (abs(tempYaw) < 170 ? (tempYaw > 0 ? tempYaw - 170 : tempYaw + 170) : 0));
+                ikMsg.L_yaw = DEFAULT_YAW + (abs(tempYaw) > 10 ? tempYaw : 0);
+                ikMsg.X_length = DEFAULT_X + (abs(ikMsg.L_yaw) > 10 ? 25 : 50);
+
+                if(visionInfo.BallDist > 100) // 10 cm
                 {
-                    if(gameInfo.kickoffTeam == ROBIT)
-                        targetYaw = FIRSTHALF_GOAL;
-                    else
-                        targetYaw = SECONDHALF_GOAL;
+                    ikMsg.X_length = DEFAULT_X + 65;
                 }
-                else
+                else if(visionInfo.BallDist || gameInfo.readyTime < 5) // 20 cm
                 {
-                    if(gameInfo.kickoffTeam == ROBIT)
-                        targetYaw = SECONDHALF_GOAL;
-                    else
+                    ikMsg.X_length = DEFAULT_X;
+                    if(gameInfo.firstHalf)
+                    {
+                        cout << "right" << endl;
                         targetYaw = FIRSTHALF_GOAL;
+                    }
+                    else
+                    {
+                        cout << "left" << endl;
+                        targetYaw = SECONDHALF_GOAL;
+                    }
+
+                    cout << "target yaw = " << targetYaw
+                         << " now yaw = " << visionInfo.yaw << endl;
+
+                    if(abs(visionInfo.yaw) <= 90)
+                        ikMsg.L_yaw = DEFAULT_YAW + (visionInfo.yaw - targetYaw);
+                    else
+                    {
+                        if(targetYaw == -90)
+                        {
+                            if(visionInfo.yaw > targetYaw)
+                                ikMsg.L_yaw = DEFAULT_YAW + (targetYaw - visionInfo.yaw);
+                            else
+                                ikMsg.L_yaw = DEFAULT_YAW + (visionInfo.yaw - targetYaw);
+                        }
+                        else
+                        {
+                            if(visionInfo.yaw > targetYaw)
+                                ikMsg.L_yaw = DEFAULT_YAW + (visionInfo.yaw - targetYaw);
+                            else
+                                ikMsg.L_yaw = DEFAULT_YAW + (targetYaw - visionInfo.yaw);
+                        }
+                    }
+
+                    if(abs(visionInfo.yaw - targetYaw) <= 10) ikMsg.flag = false;
                 }
 
                 ikMsg.Y_length = DEFAULT_Y;
                 ikMsg.Z_length = DEFAULT_Z;
-                ikMsg.L_yaw = DEFAULT_YAW - (targetYaw - visionInfo.Yaw);
-
-                ikMsg.X_length = DEFAULT_X + (abs(ikMsg.L_yaw) > 10 ? 15 : 30);
             }
             else
             {
-                if(local)
+                Tracking_point_x = ballTrackingPointX;
+                Tracking_point_y = ballTrackingPointY;
+                Tracking_thing_x = 0;
+                Tracking_thing_y = 0;
+
+                ikMsg.X_length = DEFAULT_X + 50;
+                ikMsg.Y_length = DEFAULT_Y;
+                ikMsg.Z_length = DEFAULT_Z;
+                ikMsg.L_yaw = DEFAULT_YAW + (abs(visionInfo.yaw) < 90 ?
+                                                 (abs(visionInfo.yaw) > 10 ? visionInfo.yaw : 0) :
+                                                 (abs(visionInfo.yaw) < 170 ? (visionInfo.yaw > 0 ? visionInfo.yaw - 170 : visionInfo.yaw + 170) : 0));
+                if(isPlaying)
                 {
-                    if(gameInfo.kickoffTeam == ROBIT)
-                    {
-                        cout << "KICK OFF" << endl;
-                        Tracking_point_x = ballTrackingPointX;
-                        Tracking_point_y = ballTrackingPointY;
-                        Tracking_thing_x = 0;//visionInfo.ballX;
-                        Tracking_thing_y = 0;//visionInfo.ballY;
-
-                        if(TRacking_flag_C == 0)    tracking_cnt++; // Find Ball
-                        else                        tracking_cnt = 0;
-
-                        //            if(tracking_cnt > 10)
-                        //            {
-                        //                if(TILT_POSITION > -60)
-                        //                    ikMsg.X_length = DEFAULT_X + 30;
-                        //                else
-                        //                    ikMsg.X_length = DEFAULT_X;
-
-                        //                tracking_cnt = 0;
-                        //            }
-                        //            else
-                        //                ikMsg.X_length = DEFAULT_X + 30;
-
-//                        cout << "targetY = " << visionInfo.targetY << endl;
-//                        cout << "nowY = " << visionInfo.nowY << endl;
-
-                        //                        if(visionInfo.nowY != 0)
-                        //                        {
-                        //                            int distance = abs(visionInfo.targetY - visionInfo.nowY);
-                        //                            cout << "distance = " << distance << endl;
-
-                        //                            ikMsg.X_length = DEFAULT_X + distance;
-                        //                        }
-                        //                        else
-                        //                            ikMsg.X_length = DEFAULT_X + 15;
-                    }
-                    else
-                    {
-                        Tracking_point_x = ballTrackingPointX;
-                        Tracking_point_y = ballTrackingPointY;
-                        Tracking_thing_x = 0;
-                        Tracking_thing_y = 0;
-                    }
-
-                    //        ikMsg.X_length = DEFAULT_X + 30;
-                    ikMsg.Y_length = DEFAULT_Y;
-                    ikMsg.Z_length = DEFAULT_Z;
-                    ikMsg.L_yaw = DEFAULT_YAW + visionInfo.Yaw;
-
+                    cout << "scored" << endl;
                     if(gameInfo.readyTime < 5)
                     {
-                        cout << "turn" << endl;
-                        ikMsg.X_length = DEFAULT_X;
-                        ikMsg.Y_length = DEFAULT_Y;
-                        ikMsg.Z_length = DEFAULT_Z;
-
                         if(gameInfo.firstHalf)
                         {
-                            cout << "right" << endl;
-                            targetYaw = -90;
+                            if(gameInfo.kickoffTeam == ROBIT)
+                                targetYaw = SECONDHALF_GOAL;
+                            else
+                                targetYaw = FIRSTHALF_GOAL;
                         }
                         else
                         {
-                            cout << "left" << endl;
-                            targetYaw = 90;
+                            if(gameInfo.kickoffTeam == ROBIT)
+                                targetYaw = FIRSTHALF_GOAL;
+                            else
+                                targetYaw = SECONDHALF_GOAL;
                         }
-
-                        cout << "target yaw = " << targetYaw
-                             << " now yaw = " << visionInfo.Yaw << endl;
-
-                        ikMsg.L_yaw = DEFAULT_YAW - (targetYaw - visionInfo.Yaw);
                     }
+                    else
+                    {
+                        if(gameInfo.firstHalf)
+                        {
+                            if(gameInfo.kickoffTeam == ROBIT)
+                                targetYaw = FIRSTHALF_GOAL;
+                            else
+                                targetYaw = SECONDHALF_GOAL;
+                        }
+                        else
+                        {
+                            if(gameInfo.kickoffTeam == ROBIT)
+                                targetYaw = SECONDHALF_GOAL;
+                            else
+                                targetYaw = FIRSTHALF_GOAL;
+                        }
+                    }
+
+                    ikMsg.Y_length = DEFAULT_Y;
+                    ikMsg.Z_length = DEFAULT_Z;
+                    ikMsg.L_yaw = abs(targetYaw - visionInfo.yaw) > 10 ? DEFAULT_YAW - (targetYaw - visionInfo.yaw) : DEFAULT_YAW;
+
+                    ikMsg.X_length = DEFAULT_X + (abs(ikMsg.L_yaw) > 10 ? 35 : 75);
                 }
                 else
                 {
-                    Tracking_point_x = ballTrackingPointX;
-                    Tracking_point_y = ballTrackingPointY;
-                    Tracking_thing_x = 0;
-                    Tracking_thing_y = 0;
-
-                    ikMsg.X_length = DEFAULT_X + 30;
-                    ikMsg.Y_length = DEFAULT_Y;
-                    ikMsg.Z_length = DEFAULT_Z;
-                    ikMsg.L_yaw = DEFAULT_YAW + (abs(visionInfo.Yaw) < 90 ? visionInfo.Yaw : (visionInfo.Yaw > 0 ? visionInfo.Yaw - 180 : visionInfo.Yaw + 180));
+                    ikMsg.X_length = DEFAULT_X + 50;
 
                     if(gameInfo.readyTime < 5)
                     {
-                        ikMsg.X_length = DEFAULT_X + 30;
+                        ikMsg.X_length = DEFAULT_X;
                         ikMsg.Y_length = DEFAULT_Y;
                         ikMsg.Z_length = DEFAULT_Z;
 
@@ -248,12 +328,40 @@ void robocupCallback(const ros::TimerEvent&)
                             targetYaw = SECONDHALF_GOAL;
                         }
 
-                        ikMsg.L_yaw = DEFAULT_YAW - (targetYaw - visionInfo.Yaw);
+                        if(abs(visionInfo.yaw) <= 90)
+                            ikMsg.L_yaw = DEFAULT_YAW + (visionInfo.yaw - targetYaw);
+                        else
+                        {
+                            if(targetYaw == -90)
+                            {
+                                if(visionInfo.yaw > targetYaw)
+                                    ikMsg.L_yaw = DEFAULT_YAW + (targetYaw - visionInfo.yaw);
+                                else
+                                    ikMsg.L_yaw = DEFAULT_YAW + (visionInfo.yaw - targetYaw);
+                            }
+                            else
+                            {
+                                if(visionInfo.yaw > targetYaw)
+                                    ikMsg.L_yaw = DEFAULT_YAW + (visionInfo.yaw - targetYaw);
+                                else
+                                    ikMsg.L_yaw = DEFAULT_YAW + (targetYaw - visionInfo.yaw);
+                            }
+                        }
+
+                        if(abs(targetYaw - visionInfo.yaw) < 10) stop = true;
+
+                        if(stop) ikMsg.flag = false;
                     }
+
+                    ikMsg.Y_length = DEFAULT_Y;
+                    ikMsg.Z_length = DEFAULT_Z;
+//                    ikMsg.L_yaw = DEFAULT_YAW + (abs(visionInfo.yaw) < 90 ?
+//                                                     (abs(visionInfo.yaw) > 10 ? visionInfo.yaw : 0) :
+//                                                     (abs(visionInfo.yaw) < 170 ? (visionInfo.yaw > 0 ? visionInfo.yaw - 170 : visionInfo.yaw + 170) : 0));
                 }
             }
 
-            if(ikMsg.X_length > 30) ikMsg.X_length = 30;
+            if(ikMsg.X_length > 50) ikMsg.X_length = 50;
 
             if(ikMsg.L_yaw > 10)        ikMsg.L_yaw = 10;
             else if(ikMsg.L_yaw < -10)  ikMsg.L_yaw = -10;
@@ -269,23 +377,36 @@ void robocupCallback(const ros::TimerEvent&)
             cout << "   SET\n";
             cout << "********************\n";
 
+            ikMsg.flag = false;
+            stop = false;
+            wasSet = true;
 
             if(gameInfo.kickoffTeam == ROBIT)
             {
                 robocup_case = MODE_KICK;
+                motion_what = SHOOT_L;
             }
             else
-            {
                 robocup_case = MODE_BALL_DETECT;
-            }
 
-            ikMsg.flag = false;
+//            robocup_case = MODE_BALL_DETECT;
 
             break;
         case STATE_PLAYING:
             cout << "********************\n";
             cout << "   PLAYING\n";
             cout << "********************\n";
+
+            if(!isPlaying && gameInfo.kickoffTeam != DROPBALL && gameInfo.kickoffTeam != ROBIT && gameInfo.readyTime)
+            {
+                Tracking_point_x = ballTrackingPointX;
+                Tracking_point_y = ballTrackingPointY;
+                Tracking_thing_x = visionInfo.Ballx;
+                Tracking_thing_y = visionInfo.Bally;
+
+                cout << "wait time = " << gameInfo.readyTime << endl;
+                break;
+            }
 
             isPlaying = true;
 
@@ -296,7 +417,6 @@ void robocupCallback(const ros::TimerEvent&)
                 cout<<"  write goalpost direction"<<endl;
                 cout<<"  LEFT:  1        RIGHT: 2"<<endl;
                 cout<<"============================"<<endl;
-                cin>>Gp_direction;
 
                 robocup_case = MODE_BALL_DETECT;
 
@@ -306,6 +426,7 @@ void robocupCallback(const ros::TimerEvent&)
                 cout<<endl<<"&&&&&&&&&&&&&&&&&&&  MODE_BALL_DETECT  &&&&&&&&&&&&&&&&&&&&&"<<endl<<endl;
 
                 TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY, visionInfo.Ballx, visionInfo.Bally);
+                WALK_STOP;
 
 
                 if(TRacking_flag_C == 0) //Find Ball
@@ -315,13 +436,12 @@ void robocupCallback(const ros::TimerEvent&)
                     tracking_cnt = 0;
                     lost_ball_count++;
 
-                    if(lost_ball_count > 2000 && tracking_cnt < 50)
+                    if(lost_ball_count > 800 && tracking_cnt < 50)
                     {
                         robocup_case = MODE_NO_BALL;
                         lost_ball_count = 0;
                     }
                 }
-
 
                 cout<<"tracking_cnt : "<<tracking_cnt<<endl;
 
@@ -332,21 +452,40 @@ void robocupCallback(const ros::TimerEvent&)
                     robocup_case = MODE_BALL_WALK;
                 }
 
-
                 break;
 
-            case MODE_NO_BALL:
 
+            case MODE_NO_BALL:
                 cout<<endl<<"&&&&&&&&&&&&&&&&&&&  MODE_NO_BALL  &&&&&&&&&&&&&&&&&&&&&"<<endl<<endl;
 
                 TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY, visionInfo.Ballx, visionInfo.Bally);
+                isNoball = true;
+                static int straight_cnt = 0;
+                straight_cnt++;
 
-                WALK_START(0,0,-4);
+                if(wasPenalty || wasInitial || wasSet)
+                {
+                    WALK_START(40,0,0);
+                    isNoball_pan = true;
+                }
+                else if((!wasInitial && !wasPenalty && !wasSet && straight_cnt >= 2000) || straight_cnt > 6000)
+                {
+                    WALK_START(35,0,6);
+                    isNoball_pan = true;
+                }
+                else if((!wasInitial && !wasPenalty && !wasSet) || ((wasInitial || wasPenalty || wasSet) && (straight_cnt >= 2000 && straight_cnt <= 6000)))
+                {
+                    WALK_START(0,0,6);
+                    isNoball_pan = false;
+                }
+
+
 
                 if(TRacking_flag_C == 0) //Find Ball
                 {
                     tracking_cnt++;
-                    WALK_STOP;
+                    //WALK_STOP;
+                    WALK_START(0,0,0);
                 }
 
                 else
@@ -357,13 +496,31 @@ void robocupCallback(const ros::TimerEvent&)
                 if(tracking_cnt > 80)   //30
                 {
                     tracking_cnt = 0;
+                    isNoball = false;
+                    isNoball_pan = false;
                     robocup_case = MODE_BALL_WALK;
+                    wasPenalty =false;
+                    wasInitial = false;
+                    wasSet = false;
+                    straight_cnt = 0;
                 }
 
                 break;
 
+
             case MODE_BALL_WALK:
                 cout<<endl<<"&&&&&&&&&&&&&&&&&&&  MODE_BALL_WALK  &&&&&&&&&&&&&&&&&&&&&"<<endl<<endl;
+                static int Desire_BallD = 0;
+                Desire_BallD = DesireBallD_walk_my;
+                wasPenalty = false;
+                wasInitial = false;
+                wasSet = false;
+                static int flag = 1;
+
+
+                cout<<"lost_ball_count   ===   "<<lost_ball_count<<endl;
+
+
 
                 TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY, visionInfo.Ballx, visionInfo.Bally);
 
@@ -371,542 +528,366 @@ void robocupCallback(const ros::TimerEvent&)
                 {
                     lost_ball_count++;
 
-                    if(lost_ball_count >= 2000)
+                    if(lost_ball_count >= 400)
                     {
+                        lost_ball_count = 0;
                         robocup_case = MODE_BALL_DETECT;
+                        flag = 1;
                         WALK_STOP;
                     }
                 }
 
-                if(visionInfo.BallDist < 160 && visionInfo.BallDist > 0 && visionInfo.Ballx != 0)//SHOOT  //f2p 250  220
+                if(isUDP)
                 {
-                    ikMsg.flag = false;
-                    robocup_case = MODE_KICK;
+                    if(WHAT_YOUR_CASE > robocup_case)// your
+                    {
+                        Desire_BallD = DesireBallD_walk_your;
+                        DesireWalkSpeed = 73;
+                    }
+                    else if(WHAT_YOUR_CASE <= robocup_case)
+                    {
+                        Desire_BallD = DesireBallD_walk_my;
+                        DesireWalkSpeed = 73;
+                    }
+                    else if(WHAT_YOUR_CASE == robocup_case)
+                    {
+                        static int my_cnt = 0;
+                        static int your_cnt = 0;
+
+                        if(WHAT_YOUR_BALLD >= visionInfo.BallDist && WHAT_YOUR_BALLD != 0)
+                        {
+                            my_cnt++;
+                            your_cnt = 0;
+                        }
+                        else if(WHAT_YOUR_BALLD < visionInfo.BallDist && WHAT_YOUR_BALLD != 0)
+                        {
+                            your_cnt++;
+                            my_cnt = 0;
+                        }
+
+                        if(flag){
+                        if(my_cnt > 10)
+                        {
+                            DesireWalkSpeed = 73;
+                            my_cnt = 0;
+                            your_cnt = 0;
+                            flag = 0;
+
+                        }
+                        else if(your_cnt > 10)
+                        {
+                            DesireWalkSpeed = 0;
+                            my_cnt = 0;
+                            your_cnt = 0;
+                            flag = 0;
+                        }
+
+                        }
+
+                    }
+
                 }
-                else
+
+                cout<<"SSSSSSSSIIIIIBBBAAAALLLLLLLLLLLLLLLLLLLLLLLLLL"<<Desire_BallD<<endl<<endl;
+
+                if(visionInfo.BallDist < Desire_BallD && visionInfo.BallDist > 0 && visionInfo.Ballx != 0)//SHOOT
                 {
-                    WALK_START(50, 0, 0);
-
-                    if(visionInfo.BallDist < 350 && visionInfo.BallDist > 160)
+                    if(Desire_BallD == DesireBallD_walk_my)
                     {
-                        ikMsg.X_length = DEFAULT_X + visionInfo.BallDist*0.05;
+                        robocup_case = MODE_BALL_STAND;
+                        flag = 1;
                     }
-
-                    if(PAN_POSITION > 0)//puck robot
+                    else if(Desire_BallD == DesireBallD_walk_your)
                     {
-                        ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
+                        if(visionInfo.BallDist < 1600)
+                        {
+                             WALK_START(-25, 0, 0);
+                        }
+                        else
+                            WALK_STOP;
                     }
-                    else if(PAN_POSITION < 0)//robot puck
-                    {
-                        ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
-                    }
-                    else
-                    {
-                        ikMsg.L_yaw = DEFAULT_YAW;
-                    }
-
-                    if(ikMsg.L_yaw > 8) ikMsg.L_yaw = 8;
-                    else if(ikMsg.L_yaw < -8) ikMsg.L_yaw = -8;
                 }
+                else if(visionInfo.Ballx != 0)
+                {
+                    WALK_START(DesireWalkSpeed, 0, 0);
+
+                    if(Desire_BallD == DesireBallD_walk_my)
+                    {
+                        if(visionInfo.BallDist < DesireBallD_walk_my+150 && visionInfo.BallDist > DesireBallD_walk_my)
+                        {
+                            ikMsg.X_length = DEFAULT_X + visionInfo.BallDist*0.1;
+                        }
+                    }
+
+                    SET_YAW_TO_BALL();
+                 }
 
                 break;
 
             case MODE_BALL_STAND:
                 cout<<endl<<"&&&&&&&&&&&&&&&&&&&  MODE_BALL_STAND  &&&&&&&&&&&&&&&&&&&&&"<<endl<<endl;
-
+                cout<<"isSet   =  "<<isSet<<endl;
+                static int stand_cnt = 0;
                 TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY, visionInfo.Ballx, visionInfo.Bally);
+                stand_cnt++;
 
-                cout<<endl<<endl<<"yyyyyyyyyyyyawawwwwwwwwwwwwwwwwww == "<<visionInfo.Yaw<<endl<<endl;
-                cout<<endl<<endl<<"lostballcoutn == ----------------------"<<lost_ball_count<<endl<<endl;
-
-
-                if(TRacking_flag_C)
+                if(TRacking_flag_C)// IF LOST BALL
                 {
                     lost_ball_count++;
 
-                    if(lost_ball_count >= 3000)
+                    if(lost_ball_count >= 500)
+                    {
+                        lost_ball_count = 0;
                         robocup_case = MODE_BALL_DETECT;
+                    }
                 }
 
-                if(gameInfo.firstHalf) // 0 ~ 180
+                if(isSet||visionInfo.yaw < GOALPOST+Goalpost_error && visionInfo.yaw > GOALPOST-Goalpost_error) //TURN FINISH
                 {
-                    if(visionInfo.Yaw < 95 && visionInfo.Yaw > 85) //TURN FINISH
+                    temp_yaw = visionInfo.yaw;
+                    isSet = true;
+
+                    if(visionInfo.BallDist < DesireBallD_stand && visionInfo.BallDist > 0 && visionInfo.Ballx != 0)//KICK
                     {
-                        if(visionInfo.BallDist < 140 && visionInfo.BallDist > 0 && visionInfo.Ballx != 0)//SHOOT  //f2p 250  220
-                        {
-                            cout<<endl<<"++++++++++++++++++++++++TURN FINISH+++++++++++++++++++++++++++++"<<endl<<endl;
-                            WALK_STOP;
-                            lost_ball_count = 0;
-                            robocup_case = MODE_KICK;
-                        }
-                        else if(visionInfo.BallDist > 140 && visionInfo.Ballx != 0)
-                        {
-                            WALK_START(visionInfo.BallDist*0.05,0,0);
-                            if(visionInfo.BallDist > 350)
-                                WALK_START(40,0,0);
-                        }
+                        cout<<endl<<"+++++++++TURN FINISH++++++++++"<<endl<<endl;
+                        //WALK_STOP;
+                        lost_ball_count = 0;
+                        isSet = false;
+
+
+                        robocup_case = MODE_SET_Y;    //MODE_KICK
                     }
-                    else //NEED TO TURN
+                    else if(visionInfo.BallDist > DesireBallD_stand && visionInfo.Ballx != 0)
                     {
-                        if(visionInfo.Yaw >= -90)
-                            WALK_START(0,40,0);
-                        else if(visionInfo.Yaw <= -90 || visionInfo.Yaw >= 100)
-                            WALK_START(0,-40,0);
+                        WALK_START(35, 0, 0);
 
-                        if(visionInfo.Ballx == 0)
-                            WALK_STOP;
-
-                        else if(visionInfo.Ballx!=0)//LOST BALL
+                        if(visionInfo.BallDist < DesireBallD_stand+150 && visionInfo.BallDist > DesireBallD_stand)
                         {
-                            lost_ball_count = 0;
-
-                            if(visionInfo.BallDist > 160)
-                                ikMsg.X_length = DEFAULT_X + visionInfo.BallDist*0.03;
-                            else if(visionInfo.BallDist < 160)
-                                ikMsg.X_length = DEFAULT_X - visionInfo.BallDist*0.03;
-
-                            if(PAN_POSITION > 0)
-                            {
-                                ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
-                            }
-                            else if(PAN_POSITION < 0)
-                            {
-                                ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
-                            }
-                            else
-                            {
-                                ikMsg.L_yaw = DEFAULT_YAW;
-                            }
-
+                             WALK_START(visionInfo.BallDist*0.075, 0, 0);//0.08
                         }
-                    }
+                        SET_YAW_TO_BALL();
 
+//                        if(visionInfo.yaw < GOALPOST) // LEFT TURN
+//                            ikMsg.L_yaw = DEFAULT_YAW - (abs(visionInfo.yaw - GOALPOST)*0.8);
+//                        else if(visionInfo.yaw > GOALPOST) //RIGHT TURN
+//                            ikMsg.L_yaw = DEFAULT_YAW + (abs(visionInfo.yaw - GOALPOST)*0.8);
+
+
+                    }
                 }
-
-                else/* if(Gp_direction == RIGHT)*/ // 0 ~ -180
+                else //TURN TO SET GOALPOST DIRECTION
                 {
-                    if(visionInfo.Yaw > -95 && visionInfo.Yaw < -85) //TURN FINISH
+                    cout<<"visioninfo Yaw   =====   "<<visionInfo.yaw<<endl;
+
+                    //lost ball
+                    if(visionInfo.Ballx == 0)
+                        WALK_STOP;
+
+                    else if(visionInfo.Ballx!=0)
                     {
-                        if(visionInfo.BallDist < 140 && visionInfo.BallDist > 0 && visionInfo.Ballx != 0)//SHOOT  //f2p 250  220
+                        lost_ball_count = 0;
+
+                        //turn
+                        if(GOALPOST == 90)
                         {
-                            cout<<endl<<"++++++++++++++++++++++++TURN FINISH+++++++++++++++++++++++++++++"<<endl<<endl;
-                            WALK_STOP;
-                            lost_ball_count = 0;
-                            robocup_case = MODE_KICK;
+                            if(visionInfo.yaw >= -90 && visionInfo.yaw <= GOALPOST-Goalpost_error)
+                            {
+                                //WALK_START(0,40,-3);
+                                WALK_START(0,45,-2);
+                                if(abs(visionInfo.yaw-GOALPOST)<40)
+                                    WALK_START(0,42,-1);
+                            }
+                            else if(visionInfo.yaw <= -90 || visionInfo.yaw >= GOALPOST + Goalpost_error)
+                            {
+                                //WALK_START(0,-40,3);
+                                WALK_START(0,-35,2);
+                                if(abs(visionInfo.yaw-GOALPOST)<40)
+                                    WALK_START(0,-32,1);
+                            }
                         }
-                        else if(visionInfo.BallDist > 140 && visionInfo.Ballx != 0)
+                        else
                         {
-                            WALK_START(visionInfo.BallDist*0.05,0,0);
-                            if(visionInfo.BallDist > 350)
-                                WALK_START(40,0,0);
+                            if(visionInfo.yaw <= 90 && visionInfo.yaw >= GOALPOST + Goalpost_error)
+                            {
+                                //WALK_START(0,-40,3);
+                                WALK_START(0,-35,2);
+                                if(abs(visionInfo.yaw-GOALPOST)<40)
+                                    WALK_START(0,-32,1);
+                            }
+                            else if(visionInfo.yaw <= GOALPOST-Goalpost_error || visionInfo.yaw >= 90)
+                            {
+                                //WALK_START(0,40,-3);
+                                WALK_START(0,45,-2);
+                                if(abs(visionInfo.yaw-GOALPOST)<40)
+                                    WALK_START(0,42,-1);
+                            }
                         }
-                    }
-                    else //NEED TO TURN
-                    {
-                        if(visionInfo.Yaw <= 90)
-                            WALK_START(0,-40,0);
-                        else if(visionInfo.Yaw <= -100 || visionInfo.Yaw >= 90)
-                            WALK_START(0,40,0);
 
-                        if(visionInfo.Ballx == 0)
-                            WALK_STOP;
+                        // SET BALLDISTANCE
+                        if(visionInfo.BallDist > DesireBallD_walk_my)
+                            ikMsg.X_length = DEFAULT_X + visionInfo.BallDist*0.05;
+                        else if(visionInfo.BallDist < DesireBallD_walk_my)
+                            ikMsg.X_length = DEFAULT_X - visionInfo.BallDist*0.05;
 
-                        else if(visionInfo.Ballx!=0)//LOST BALL
-                        {
-                            lost_ball_count = 0;
+                        SET_YAW_TO_BALL();
 
-                            if(visionInfo.BallDist > 160)
-                                ikMsg.X_length = DEFAULT_X + visionInfo.BallDist*0.03;
-                            else if(visionInfo.BallDist < 160)
-                                ikMsg.X_length = DEFAULT_X - visionInfo.BallDist*0.03;
-
-                            if(PAN_POSITION > 0)
-                            {
-                                ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
-                            }
-                            else if(PAN_POSITION < 0)
-                            {
-                                ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
-                            }
-                            else
-                            {
-                                ikMsg.L_yaw = DEFAULT_YAW;
-                            }
-
-                        }
                     }
                 }
 
                 break;
 
-            case MODE_KICK_READY:
+
+            case MODE_SET_Y:
+                cout<<endl<<"&&&&&&&&&&&&&&&&&&&  MODE_SET_Y  &&&&&&&&&&&&&&&&&&&&&"<<endl<<endl;
+                cout<<"PAN = "<<PAN_POSITION<<endl;
+                TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY,  visionInfo.Ballx, visionInfo.Bally);
+                static int set_cnt = 0;
+                set_cnt++;
+
+                cout<<"SET_Y_cnt       ===============      "<<set_cnt<<endl;
+
+                if(PAN_POSITION > 0) //BALL ROBOT
+                {
+                    if(set_cnt > 1000)
+                    {
+                        motion_what = SHOOT_L;
+                        robocup_case = MODE_KICK;
+                        set_cnt = 0;
+                    }
+                    else if(abs(DesirePP_L - PAN_POSITION) < 15)
+                    {
+                        motion_what = SHOOT_L;
+                        robocup_case = MODE_KICK;
+                        set_cnt = 0;
+                    }
+                    else if(PAN_POSITION < DesirePP_L - 15)
+                    {
+                        WALK_START(0,5,0);
+                    }
+                    else if(PAN_POSITION > DesirePP_L + 15)
+                    {
+                        WALK_START(0,-5,0);
+                    }
+                }
+                else if(PAN_POSITION < 0)
+                {
+                    if(set_cnt > 1000)
+                    {
+                        motion_what = SHOOT_R;
+                        robocup_case = MODE_KICK;
+                        set_cnt = 0;
+                    }
+                    if(abs(DesirePP_R - PAN_POSITION) < 15)
+                    {
+                        motion_what = SHOOT_R;
+                        robocup_case = MODE_KICK;
+                        set_cnt = 0;
+                    }
+                    else if(PAN_POSITION < DesirePP_R - 15)
+                    {
+                        WALK_START(0,5,0);
+                    }
+                    else if(PAN_POSITION > DesirePP_R + 15)
+                    {
+                        WALK_START(0,-5,0);
+                    }
+                }
 
 
                 break;
+
 
             case MODE_KICK:
                 cout<<endl<<"&&&&&&&&&&&&&&&&&&&  MODE_KICK  &&&&&&&&&&&&&&&&&&&&&"<<endl<<endl;
 
                 WALK_STOP;
-                motion_flag = true;
-                DXL_Motion(SHOOT);
+                cout<<"walk_term : "<<walk_term<<endl;
+                if(walk_term++ >= 170)
+                {
+                    motion_flag = true;
+                    DXL_Motion(motion_what);
 
-                if(motion_flag)
-                    motion_flag = false;
+                    if(motion_flag)
+                        motion_flag = false;
 
-                robocup_case = MODE_STOP;
-
+                    robocup_case = MODE_STOP;
+                    add_what -= 3;
+                    scan_start = true;
+                    walk_term = 0;
+                }
                 break;
 
+
             case MODE_STOP:
+                cout<<endl<<"&&&&&&&&&&&&&&&&&&&  MODE_STOP  &&&&&&&&&&&&&&&&&&&&&"<<endl<<endl;
+
                 if(motion_end)
                 {
                     robocup_case = MODE_BALL_DETECT;
                     motion_end = 0;
                 }
-
-
-
                 break;
+
+
             default:
                 break;
+
             }
 
-        }
+            break;
+        case STATE_FINISHED:
+            cout << "********************\n";
+            cout << "1. FINISHED\n";
+            cout << "********************\n";
 
-        //        switch (gameInfo.state)
-        //        {
-        //        case STATE_INITIAL:
-        //            cout << "********************\n";
-        //            cout << "   INITIAL\n";
-        //            cout << "********************\n";
+            isPlaying = false;
 
-        //            TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY, 0, 0);
+            TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY, 0, 0);
+            WALK_STOP;
 
-        //            ikMsg.flag = false;
+            break;
+        default:
+            break;
 
-        //            break;
-        //        case STATE_READY:
-        //            cout << "********************\n";
-        //            cout << "   READY\n";
-        //            cout << "********************\n";
+            gameInfo.stateBefore = gameInfo.state;
+            temp_case = robocup_case;
+        }}
 
-        //            TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY, 0, 0);
-
-        //            ikMsg.flag = true;
-
-        //            ikMsg.X_length = DEFAULT_X;
-        //            ikMsg.Y_length = DEFAULT_Y;
-        //            ikMsg.Z_length = DEFAULT_Z;
-        //            ikMsg.L_yaw = DEFAULT_YAW;
-
-        //            break;
-        //        case STATE_SET:
-        //            cout << "********************\n";
-        //            cout << "   SET\n";
-        //            cout << "********************\n";
-
-        //            ikMsg.flag = false;
-
-        //            break;
-        //        case STATE_PLAYING:
-        //            cout << "********************\n";
-        //            cout << "   PLAYING\n";
-        //            cout << "********************\n";
-
-        //            switch (robocup_case)
-        //            {
-        //            case MODE_TEST:
-        //                cout<<"============================"<<endl;
-        //                cout<<"  write goalpost direction"<<endl;
-        //                cout<<"  LEFT:  1        RIGHT: 2"<<endl;
-        //                cout<<"============================"<<endl;
-        //                cin>>Gp_direction;
-
-        //                robocup_case = MODE_BALL_DETECT;
-
-        //                break;
-
-        //            case MODE_BALL_DETECT:
-        //                cout<<endl<<"&&&&&&&&&&&&&&&&&&&  MODE_BALL_DETECT  &&&&&&&&&&&&&&&&&&&&&"<<endl<<endl;
-
-        //                TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY, visionInfo.Ballx, visionInfo.Bally);
-
-
-        //                if(TRacking_flag_C == 0) //Find Ball
-        //                    tracking_cnt++;
-        //                else
-        //                {
-        //                    tracking_cnt = 0;
-        //                    lost_ball_count++;
-
-        //                    if(lost_ball_count > 2000 && tracking_cnt < 50)
-        //                    {
-        //                        robocup_case = MODE_NO_BALL;
-        //                        lost_ball_count = 0;
-        //                    }
-        //                }
-
-
-        //                cout<<"tracking_cnt : "<<tracking_cnt<<endl;
-
-        //                if(tracking_cnt > 80)   //30
-        //                {
-        //                    tracking_cnt = 0;
-        //                    lost_ball_count = 0;
-        //                    robocup_case = MODE_BALL_WALK;
-        //                }
-
-
-        //                break;
-
-        //            case MODE_NO_BALL:
-
-        //                cout<<endl<<"&&&&&&&&&&&&&&&&&&&  MODE_NO_BALL  &&&&&&&&&&&&&&&&&&&&&"<<endl<<endl;
-
-        //                TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY, visionInfo.Ballx, visionInfo.Bally);
-
-        //                WALK_START(0,0,-4);
-
-        //                if(TRacking_flag_C == 0) //Find Ball
-        //                {
-        //                    tracking_cnt++;
-        //                    WALK_STOP;
-        //                }
-
-        //                else
-        //                    tracking_cnt = 0;
-
-        //                cout<<"tracking_cnt : "<<tracking_cnt<<endl;
-
-        //                if(tracking_cnt > 80)   //30
-        //                {
-        //                    tracking_cnt = 0;
-        //                    robocup_case = MODE_BALL_WALK;
-        //                }
-
-        //                break;
-
-        //            case MODE_BALL_WALK:
-        //                cout<<endl<<"&&&&&&&&&&&&&&&&&&&  MODE_BALL_WALK  &&&&&&&&&&&&&&&&&&&&&"<<endl<<endl;
-
-        //                TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY, visionInfo.Ballx, visionInfo.Bally);
-
-        //                if(TRacking_flag_C)
-        //                {
-        //                    lost_ball_count++;
-
-        //                    if(lost_ball_count >= 2000)
-        //                    {
-        //                        robocup_case = MODE_BALL_DETECT;
-        //                        WALK_STOP;
-        //                    }
-        //                }
-
-        //                if(visionInfo.BallDist < 160 && visionInfo.BallDist > 0 && visionInfo.Ballx != 0)//SHOOT  //f2p 250  220
-        //                {
-        //                    ikMsg.flag = false;
-        //                    robocup_case = MODE_KICK;
-        //                }
-        //                else
-        //                {
-        //                    WALK_START(50, 0, 0);
-
-        //                    if(visionInfo.BallDist < 350 && visionInfo.BallDist > 160)
-        //                    {
-        //                        ikMsg.X_length = DEFAULT_X + visionInfo.BallDist*0.05;
-        //                    }
-
-        //                    if(PAN_POSITION > 0)//puck robot
-        //                    {
-        //                        ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
-        //                    }
-        //                    else if(PAN_POSITION < 0)//robot puck
-        //                    {
-        //                        ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
-        //                    }
-        //                    else
-        //                    {
-        //                        ikMsg.L_yaw = DEFAULT_YAW;
-        //                    }
-
-        //                    if(ikMsg.L_yaw > 8) ikMsg.L_yaw = 8;
-        //                    else if(ikMsg.L_yaw < -8) ikMsg.L_yaw = -8;
-        //                }
-
-        //                break;
-
-        //            case MODE_BALL_STAND:
-        //                cout<<endl<<"&&&&&&&&&&&&&&&&&&&  MODE_BALL_STAND  &&&&&&&&&&&&&&&&&&&&&"<<endl<<endl;
-
-        //                TRACKING_WHAT(ballTrackingPointX, ballTrackingPointY, visionInfo.Ballx, visionInfo.Bally);
-
-        //                cout<<endl<<endl<<"yyyyyyyyyyyyawawwwwwwwwwwwwwwwwww == "<<visionInfo.Yaw<<endl<<endl;
-        //                cout<<endl<<endl<<"lostballcoutn == ----------------------"<<lost_ball_count<<endl<<endl;
-
-
-        //                if(TRacking_flag_C)
-        //                {
-        //                    lost_ball_count++;
-
-        //                    if(lost_ball_count >= 3000)
-        //                        robocup_case = MODE_BALL_DETECT;
-        //                }
-
-        //                if(Gp_direction == LEFT) // 0 ~ 180
-        //                {
-        //                    if(visionInfo.Yaw < 95 && visionInfo.Yaw > 85) //TURN FINISH
-        //                    {
-        //                        if(visionInfo.BallDist < 140 && visionInfo.BallDist > 0 && visionInfo.Ballx != 0)//SHOOT  //f2p 250  220
-        //                        {
-        //                            cout<<endl<<"++++++++++++++++++++++++TURN FINISH+++++++++++++++++++++++++++++"<<endl<<endl;
-        //                            WALK_STOP;
-        //                            lost_ball_count = 0;
-        //                            robocup_case = MODE_KICK;
-        //                        }
-        //                        else if(visionInfo.BallDist > 140 && visionInfo.Ballx != 0)
-        //                        {
-        //                            WALK_START(visionInfo.BallDist*0.05,0,0);
-        //                            if(visionInfo.BallDist > 350)
-        //                                WALK_START(40,0,0);
-        //                        }
-        //                    }
-        //                    else //NEED TO TURN
-        //                    {
-        //                        if(visionInfo.Yaw >= -90)
-        //                            WALK_START(0,40,0);
-        //                        else if(visionInfo.Yaw <= -90 || visionInfo.Yaw >= 100)
-        //                            WALK_START(0,-40,0);
-
-        //                        if(visionInfo.Ballx == 0)
-        //                            WALK_STOP;
-
-        //                        else if(visionInfo.Ballx!=0)//LOST BALL
-        //                        {
-        //                            lost_ball_count = 0;
-
-        //                            if(visionInfo.BallDist > 160)
-        //                                ikMsg.X_length = DEFAULT_X + visionInfo.BallDist*0.03;
-        //                            else if(visionInfo.BallDist < 160)
-        //                                ikMsg.X_length = DEFAULT_X - visionInfo.BallDist*0.03;
-
-        //                            if(PAN_POSITION > 0)
-        //                            {
-        //                                ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
-        //                            }
-        //                            else if(PAN_POSITION < 0)
-        //                            {
-        //                                ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
-        //                            }
-        //                            else
-        //                            {
-        //                                ikMsg.L_yaw = DEFAULT_YAW;
-        //                            }
-
-        //                        }
-        //                    }
-
-        //                }
-
-        //                else if(Gp_direction == RIGHT) // 0 ~ -180
-        //                {
-        //                    if(visionInfo.Yaw > -95 && visionInfo.Yaw < -85) //TURN FINISH
-        //                    {
-        //                        if(visionInfo.BallDist < 140 && visionInfo.BallDist > 0 && visionInfo.Ballx != 0)//SHOOT  //f2p 250  220
-        //                        {
-        //                            cout<<endl<<"++++++++++++++++++++++++TURN FINISH+++++++++++++++++++++++++++++"<<endl<<endl;
-        //                            WALK_STOP;
-        //                            lost_ball_count = 0;
-        //                            robocup_case = MODE_KICK;
-        //                        }
-        //                        else if(visionInfo.BallDist > 140 && visionInfo.Ballx != 0)
-        //                        {
-        //                            WALK_START(visionInfo.BallDist*0.05,0,0);
-        //                            if(visionInfo.BallDist > 350)
-        //                                WALK_START(40,0,0);
-        //                        }
-        //                    }
-        //                    else //NEED TO TURN
-        //                    {
-        //                        if(visionInfo.Yaw <= 90)
-        //                            WALK_START(0,-40,0);
-        //                        else if(visionInfo.Yaw <= -100 || visionInfo.Yaw >= 90)
-        //                            WALK_START(0,40,0);
-
-        //                        if(visionInfo.Ballx == 0)
-        //                            WALK_STOP;
-
-        //                        else if(visionInfo.Ballx!=0)//LOST BALL
-        //                        {
-        //                            lost_ball_count = 0;
-
-        //                            if(visionInfo.BallDist > 160)
-        //                                ikMsg.X_length = DEFAULT_X + visionInfo.BallDist*0.03;
-        //                            else if(visionInfo.BallDist < 160)
-        //                                ikMsg.X_length = DEFAULT_X - visionInfo.BallDist*0.03;
-
-        //                            if(PAN_POSITION > 0)
-        //                            {
-        //                                ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
-        //                            }
-        //                            else if(PAN_POSITION < 0)
-        //                            {
-        //                                ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
-        //                            }
-        //                            else
-        //                            {
-        //                                ikMsg.L_yaw = DEFAULT_YAW;
-        //                            }
-
-        //                        }
-        //                    }
-        //                }
-
-        //                break;
-
-        //            case MODE_KICK_READY:
-
-
-        //                break;
-        //            case MODE_KICK:
-        //                cout<<endl<<"&&&&&&&&&&&&&&&&&&&  MODE_KICK  &&&&&&&&&&&&&&&&&&&&&"<<endl<<endl;
-
-        //                WALK_STOP;
-        //                motion_flag = true;
-        //                DXL_Motion(SHOOT);
-
-        //                if(motion_flag)
-        //                    motion_flag = false;
-
-        //                if(motion_end = 1)
-        //                {
-        //                    robocup_case = MODE_BALL_DETECT;
-        //                    motion_end = 0;
-        //                }
-
-        //                break;
-        //            default:
-        //                break;
-        //            }
-
-        //            break;
-        //        case STATE_FINISHED:
-        //            cout << "********************\n";
-        //            cout << "1. FINISHED\n";
-        //            cout << "********************\n";
-
-
-        //            break;
-        //        default:
-        //            break;
-        //        }
-
-        ptMsg.Angle_Yaw = PAN_POSITION;
-        ptMsg.Angle_Pitch = TILT_POSITION;
-
-        pantiltPub.publish(ptMsg);
-        ikPub.publish(ikMsg);
     }
+
+    ptMsg.Angle_Yaw = PAN_POSITION;
+    ptMsg.Angle_Pitch = TILT_POSITION;
+
+    pantiltPub.publish(ptMsg);
+    ikPub.publish(ikMsg);
+
+    if(gameInfo.state == STATE_PLAYING)
+        m2uMsg.gamecase = robocup_case;
+    else
+        m2uMsg.gamecase = 0;
+    m2uMsg.ball_dt = visionInfo.BallDist;
+    casePub.publish(m2uMsg);
+}
+
+
+
+void SET_YAW_TO_BALL()
+{
+    if(PAN_POSITION > 0)//BALL ROBOT
+    {
+        ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
+    }
+    else if(PAN_POSITION < 0)//ROBOT BALL
+    {
+        ikMsg.L_yaw = DEFAULT_YAW - (PAN_POSITION * 0.3);
+    }
+    else
+    {
+        ikMsg.L_yaw = DEFAULT_YAW;
+    }
+    //yaw value limit
+    if(ikMsg.L_yaw > 8) ikMsg.L_yaw = 8;
+    else if(ikMsg.L_yaw < -8) ikMsg.L_yaw = -8;
 }
 
 void WALK_START(double x, double y, double yaw)
@@ -941,25 +922,37 @@ void visionCallback(const robocup2019_vision::robocupVision_msg::ConstPtr &msg)
     visionInfo.Ballx = msg->ballX;
     visionInfo.Bally = msg->ballY;
     visionInfo.BallDist = msg->ballD;
-    visionInfo.Yaw = msg->yaw;
+    visionInfo.yaw = msg->yaw;// - add_what;
+    visionInfo.targetY = msg->targetY;
+    visionInfo.nowY = msg->nowY;
+    visionInfo.targetYaw = msg->targetYaw;
+
+//    if(visionInfo.yaw > 180)        visionInfo.yaw -= 360;
+//    else if(visionInfo.yaw <= -180) visionInfo.yaw += 360;
 }
 
 void imuCallback(const mw_ahrsv1::imu_msg::ConstPtr &msg)
 {
     imuInfo.pitch = msg->pitch;
+    imuInfo.roll = msg->roll;
 }
 
 void motionCallback(const serial_mcu::motion_end::ConstPtr &msg)
 {
     motion_end = msg->motion_end;
 }
+void udpCallback(const udpcom::udp2master::ConstPtr &msg)
+{
+    WHAT_YOUR_CASE = msg->yourcase;
+    WHAT_YOUR_BALLD = msg->yourballdt;
+}
+
 void DXL_Motion(unsigned char Motion_Num)
 {
     serial_mcu::Mt2Serial_msg motion_msg;
     motion_msg.Motion_Mode = 1;
     motion_msg.Motion_Num = Motion_Num;
-    if(motion_flag)
-        motionPub.publish(motion_msg);
+    motionPub.publish(motion_msg);
 }
 
 
@@ -973,66 +966,34 @@ int Tracking(double now_x, double X_POINT_STANDARD, double now_y, double Y_POINT
     static int scan_flag = 0;
     static double scan_var = -0.6;
     static int missing_cnt = 0;
-    static int turn_cnt = 0;
-    static int detecting_cnt = 0;
-    int waista = 0;
-    static int waista_past = 0;
-    static int waista_cnt = 0;
-    static int PAN_Flag = 1;
-    static int TILT_Flag = 0;
-    static int TILT_UP_COUNT = 0;
 
-    if(now_x == 0 && (turn_cnt <= 8))
-    {
-        missing_cnt++;
-        waista = 0;
-        mode = 0;
-    }
-    else if(finding_turn)
-    {
-        mode = 2;
-        waist_flag = 0;
-        turn_cnt = 0;
-    }
-    else
-    {
-        missing_cnt = 0;
-        mode = 1;
-        waista = 1;
-    }
+        static int PAN_Flag = 1;
+        static int TILT_Flag = 0;
+        static int TILT_UP_COUNT = 0;
 
-    if(waista != waista_past)
-        waista_cnt++;
-    else
-        waista_cnt = 0;
-
-    if(waista_cnt > 5)
-    {
-        mode = 2;
-        waista_cnt = 0;
-
-        if(PAN_POSITION > 0)
+        if(now_x == 0)
         {
-            turn_cnt =3;
-            waist_flag = -1;
+            missing_cnt++;
+            mode = 0;
         }
-
         else
         {
-            turn_cnt =3;
-            waist_flag = 1;
+            missing_cnt = 0;
+            mode = 1;
         }
-    }
-
-    waista_past = waista;
 
     if(missing_cnt > 50)
+    {
         mode = 2;
+
+        if(isNoball && !isNoball_pan)
+            mode = 3;
+    }
+
 
 
     if(mode == 1)   // Tracking
     {
-        turn_cnt = 0;
         Tracking_flag = 0;
 
         PID_Control_Float(&Tracking_pid_pan, X_POINT_STANDARD, now_x);
@@ -1067,32 +1028,19 @@ int Tracking(double now_x, double X_POINT_STANDARD, double now_y, double Y_POINT
             TILT_POSITION = Tilt_Min;
         }
 
-        if(waist_flag != 0 && robocup_case != MODE_GOALPOST_DETECT)
-        {
-            if(detecting_cnt ++ > 10)
-            {
-                waist_flag = 0;
-                temp_pan_position = PAN_POSITION;
-                temp_tilt_position = TILT_POSITION;
-                temp_case = robocup_case;
-                //robocup_case = SCAN;
-                detecting_cnt = 0;
-            }
-        }
-
     }
 
     else if(mode == 2)  // Scan
     {
-
         std::cout << "TILT_Flag = " << TILT_Flag << std::endl;
         std::cout << "PAN_Flag = " << PAN_Flag << std::endl;
         std::cout << "tiltupcount = " << TILT_UP_COUNT << std::endl;
         std::cout << "PAN_POSITION = " << PAN_POSITION << std::endl;
         std::cout << "TILT_POSITION = " << TILT_POSITION << std::endl;
+
         if(PAN_Flag == 1) // Go To Right
         {
-            PAN_POSITION = PAN_POSITION - 0.2;
+            PAN_POSITION = PAN_POSITION - 1.0;
 
             if(PAN_POSITION < -ballScanPanRange)
             {
@@ -1102,7 +1050,7 @@ int Tracking(double now_x, double X_POINT_STANDARD, double now_y, double Y_POINT
         }
         else if(PAN_Flag == 2) // Go To Left
         {
-            PAN_POSITION = PAN_POSITION + 0.2;
+            PAN_POSITION = PAN_POSITION + 1.0;
 
             if(PAN_POSITION > ballScanPanRange)
             {
@@ -1125,10 +1073,11 @@ int Tracking(double now_x, double X_POINT_STANDARD, double now_y, double Y_POINT
             }
         }
 
-        if(TILT_UP_COUNT >= 4)
+        if(scan_start || TILT_UP_COUNT >= 4)
         {
             TILT_POSITION = 0; // 80
             TILT_UP_COUNT = 0;
+            scan_start = false;
         }
 
         if(TILT_POSITION > Tilt_Max)
@@ -1143,6 +1092,52 @@ int Tracking(double now_x, double X_POINT_STANDARD, double now_y, double Y_POINT
 
     }
 
+    else if(mode == 3)  // Only Tilt
+    {
+        std::cout << "TILT_Flag = " << TILT_Flag << std::endl;
+        std::cout << "PAN_Flag = " << PAN_Flag << std::endl;
+        std::cout << "tiltupcount = " << TILT_UP_COUNT << std::endl;
+        std::cout << "PAN_POSITION = " << PAN_POSITION << std::endl;
+        std::cout << "TILT_POSITION = " << TILT_POSITION << std::endl;
+
+        PAN_POSITION = 0;
+
+        if(!TILT_Flag)
+        {
+            TILT_POSITION = TILT_POSITION - 0.5;
+            if(TILT_POSITION < -80)
+            {
+                TILT_Flag = 1;
+            }
+        }
+        else if(TILT_Flag)
+        {
+            TILT_POSITION = TILT_POSITION + 0.5;
+            if(TILT_POSITION >= 0)
+            {
+                TILT_Flag = 0;
+            }
+        }
+
+        if(scan_start)
+        {
+            TILT_POSITION = 0; // 80
+            TILT_UP_COUNT = 0;
+            scan_start = false;
+        }
+
+        if(TILT_POSITION > Tilt_Max)
+        {
+            TILT_POSITION = Tilt_Max;
+        }
+
+        else if(TILT_POSITION < Tilt_Min)
+        {
+            TILT_POSITION = Tilt_Min;
+        }
+
+
+    }
 
     return Tracking_flag;
 }

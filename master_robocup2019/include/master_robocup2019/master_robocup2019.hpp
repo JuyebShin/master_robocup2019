@@ -17,33 +17,33 @@
 #include "motion_end.h"
 #include "Mt2Serial_msg.h"
 #include "imu_msg.h"
-
+#include "udp_order.h"
+#include "udp_gamecase.h"
+#include "master2udp.h"
+#include "udp2master.h"
 //MOTION=========================================================
-#define SHOOT 0x01
-
-
+#define SHOOT_R 0x01
+#define SHOOT_L 0x02
+#define STAND_B 0x03
+#define STAND_F 0x04
+#define STAND_R 0x05
+#define STAND_L 0x06
 
 //ROBOCUP MODE===================================================
 #define MODE_TEST                0
 
 #define MODE_BALL_DETECT                11
-#define MODE_BALL_STAND                 12
 #define MODE_BALL_WALK                  13
-#define MODE_KICK_READY                 14
-#define MODE_KICK                       15
+#define MODE_NO_BALL                    12
+#define MODE_BALL_STAND                 14
+#define MODE_SET_Y                      15
+#define MODE_KICK                       16
+#define MODE_STOP                       17
 
-#define MODE_GOALPOST_DETECT            20
-#define MODE_STOP                       999
-
-#define MODE_NO_BALL                            1000
-
-/** inverse kinematics defines
- *
- * */
 
 //ROBOT INFO==============================================================
 #define DEFAULT_X       -16
-#define DEFAULT_Y       0
+#define DEFAULT_Y       -2
 #define DEFAULT_Z       102
 #define DEFAULT_YAW     0
 
@@ -58,10 +58,10 @@
 #define LEFT    1
 #define RIGHT   2
 
-#define ROBIT               37
+#define ROBIT               17      //37
 
-#define FIRSTHALF_GOAL      -90
-#define SECONDHALF_GOAL     90
+#define FIRSTHALF_GOAL      90
+#define SECONDHALF_GOAL     -90
 
 typedef struct _GameState
 {
@@ -80,7 +80,10 @@ typedef struct _VisionMsg
     int Ballx;
     int Bally;
     int BallDist;
-    int Yaw;
+    int yaw;
+    int targetY;
+    int nowY;
+    int targetYaw;
 
 } VisionMsg;
 
@@ -101,6 +104,8 @@ bool motion_flag = false;
 pan_tilt::pan_tilt_msg ptMsg;
 inverse_kinematics::info_kinematics_msg ikMsg;
 serial_mcu::Mt2Serial_msg motionMsg;
+udpcom::master2udp m2uMsg;
+
 
 PID Tracking_pid_pan;
 PID Tracking_pid_tilt;
@@ -109,14 +114,17 @@ ros::Subscriber gameSub;
 ros::Subscriber visionSub;
 ros::Subscriber imuSub;
 ros::Subscriber motionendSub;
+ros::Subscriber udpsub;
 //publisher
 ros::Publisher pantiltPub;
 ros::Publisher ikPub;
 ros::Publisher motionPub;
+ros::Publisher casePub;
 
 
 //FUCTION====================================================================
 #define WALK_STOP ikMsg.flag = 0
+void SET_YAW_TO_BALL();
 void WALK_START(double x, double y, double yaw);
 void TRACKING_WHAT(int TrackingPoint_x, int TrackingPoint_y, int TrackingThing_x, int TrackingThing_y);
 
@@ -125,6 +133,7 @@ void gameCallback(const gamecontroller::robocupController2::ConstPtr&);
 void visionCallback(const robocup2019_vision::robocupVision_msg::ConstPtr&);
 void imuCallback(const mw_ahrsv1::imu_msg::ConstPtr&);
 void motionCallback(const serial_mcu::motion_end::ConstPtr&);
+void udpCallback(const udpcom::udp2master::ConstPtr&);
 
 void DXL_Motion(unsigned char Motion_Num);
 int Tracking(double now_x, double X_POINT_STANDARD, double now_y, double Y_POINT_STANDARD);
@@ -133,8 +142,8 @@ int Tracking(double now_x, double X_POINT_STANDARD, double now_y, double Y_POINT
 //TRACKING PARAMETER===========================================================
 const int trackingDefaultPointX        = 320;
 const int trackingDefaultPointY        = 240;
-const int defaultPanMax                = 50;
-const int defaultPanMin                = -50;
+const int defaultPanMax                = 75;
+const int defaultPanMin                = -75;
 const int defaultTiltMax               = 0;
 const int defaultTiltMin               = -80;
 const int defaultScanPanRange          = 30;
