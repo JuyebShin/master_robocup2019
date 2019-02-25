@@ -26,7 +26,7 @@
 // HL
 #define TEAM_CYAN                   0
 #define TEAM_MAGENTA                1
-#define DROPBALL                    255
+#define DROPBALL                    128
 
 #define GAME_ROUNDROBIN             0
 #define GAME_PLAYOFF                1
